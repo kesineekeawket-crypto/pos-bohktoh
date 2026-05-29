@@ -1433,65 +1433,84 @@ function confirmCheckout(){
   const okBtn = document.getElementById('mo-ok-btn');
   if(!okBtn || okBtn.disabled) return;
   okBtn.disabled = true;
-  try{
-    const {sub,disc,total}=calcTotals();
-    const isGift=payMode==='gift';
-    const newId = genOrderId();
-    const order={
-      id:newId, time:new Date().toISOString(),
-      customer:document.getElementById('c-name').value||'',
-      note:document.getElementById('c-note').value||'',
-      staffCode:currentUser.code, staffName:currentUser.name,
-      items:JSON.parse(JSON.stringify(cart)),
-      sub,disc,total,payMode,isGift,
-      type:cart.some(c=>c.type==='promo')?'promo':'normal',
-      photos:[...photoList],
-    };
-    cart.forEach(it=>{
-      const q=it.qty||1;
-      if(it.type==='promo'){
-        it.items.forEach(x=>{
-          const p=gp(x.productId); if(!p)return;
-          if(x.free){ p.freeGiven=(p.freeGiven||0)+q; p.sold=(p.sold||0)+q; }
-          else{ p.stock=Math.max(0,p.stock-q); p.sold=(p.sold||0)+q; }
-        });
-      } else {
-        const p=gp(it.productId); if(!p)return;
-        if(it.isGift||isGift){ p.freeGiven=(p.freeGiven||0)+it.qty; p.sold=(p.sold||0)+it.qty; }
-        else{ p.stock=Math.max(0,p.stock-it.qty); p.sold=(p.sold||0)+it.qty; }
-      }
-    });
-    orders.push(order);
-    _lastOrderHash = orders.map(x=>x.id).join(',');
-    save();
-    cart=[]; photoList=[];
-    ['c-name','c-note','disc-val'].forEach(id=>{ const el=document.getElementById(id); if(el)el.value=''; });
-    const wrap=document.getElementById('photo-slots-wrap'); if(wrap) wrap.innerHTML='';
-    payMode='cash';
-    document.querySelectorAll('.pb').forEach(b=>b.classList.remove('on'));
-    const cashBtn=document.querySelector('.pb'); if(cashBtn) cashBtn.classList.add('on');
-    const ps=document.getElementById('photo-sec'); if(ps) ps.style.display='block';
-    const lbl=document.getElementById('photo-sec-label'); if(lbl) lbl.textContent='แนบภาพ (เพิ่มหลังชำระได้)';
-    document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
-    document.getElementById('page-pos').classList.add('active');
-    document.querySelectorAll('.nb').forEach(x=>x.classList.remove('active'));
-    const posBtn=document.querySelector('.nb'); if(posBtn) posBtn.classList.add('active');
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-    const firstTab=document.querySelector('.tab'); if(firstTab) firstTab.classList.add('active');
-    ['much','4u2','eyedol','normal'].forEach(g=>{ const el=document.getElementById('tab-'+g); if(el) el.classList.add('hidden'); });
-    const muchTab=document.getElementById('tab-much'); if(muchTab) muchTab.classList.remove('hidden');
-    updateCartUI();
-    toast('✅ บันทึกออเดอร์ #'+order.id+' สำเร็จ!','ok');
-    setTimeout(()=>{ fbQueuePush(order); }, 50);
-  } catch(err){
-    console.error('checkout error:', err);
-    toast('⚠ เกิดข้อผิดพลาด กรุณาลองใหม่','err');
-  } finally {
-    document.getElementById('mo-checkout').classList.add('hidden');
-    const b=document.getElementById('mo-ok-btn');
-    if(b){ b.disabled=false; b.textContent='ยืนยัน ✓'; }
-    window._co=false;
-  }
+
+  // ── ปิด modal และ reset UI ทันทีก่อนทำอะไรทั้งหมด ──
+  document.getElementById('mo-checkout').classList.add('hidden');
+  okBtn.disabled = false;
+  okBtn.textContent = 'ยืนยัน ✓';
+  window._co = false;
+
+  const {sub,disc,total}=calcTotals();
+  const isGift=payMode==='gift';
+  const newId = genOrderId();
+
+  // ── ย่อรูปภาพถ้าใหญ่เกิน 200KB ──
+  const safePhotos = photoList.map(p=>{
+    if(p && p.length > 200000){
+      try{
+        const canvas = document.createElement('canvas');
+        const img = new Image();
+        img.src = p;
+        canvas.width = 400; canvas.height = 300;
+        canvas.getContext('2d').drawImage(img,0,0,400,300);
+        return canvas.toDataURL('image/jpeg',0.5);
+      }catch(e){ return ''; }
+    }
+    return p;
+  }).filter(Boolean);
+
+  const order={
+    id:newId, time:new Date().toISOString(),
+    customer:document.getElementById('c-name').value||'',
+    note:document.getElementById('c-note').value||'',
+    staffCode:currentUser.code, staffName:currentUser.name,
+    items:JSON.parse(JSON.stringify(cart)),
+    sub,disc,total,payMode,isGift,
+    type:cart.some(c=>c.type==='promo')?'promo':'normal',
+    photos:safePhotos,
+  };
+
+  // ── ตัด stock local ──
+  cart.forEach(it=>{
+    const q=it.qty||1;
+    if(it.type==='promo'){
+      it.items.forEach(x=>{
+        const p=gp(x.productId); if(!p)return;
+        if(x.free){ p.freeGiven=(p.freeGiven||0)+q; p.sold=(p.sold||0)+q; }
+        else{ p.stock=Math.max(0,p.stock-q); p.sold=(p.sold||0)+q; }
+      });
+    } else {
+      const p=gp(it.productId); if(!p)return;
+      if(it.isGift||isGift){ p.freeGiven=(p.freeGiven||0)+it.qty; p.sold=(p.sold||0)+it.qty; }
+      else{ p.stock=Math.max(0,p.stock-it.qty); p.sold=(p.sold||0)+it.qty; }
+    }
+  });
+
+  // ── บันทึก local ──
+  orders.push(order);
+  _lastOrderHash = orders.map(x=>x.id).join(',');
+  try{ save(); }catch(e){}
+
+  // ── reset cart/form/UI ──
+  cart=[]; photoList=[];
+  ['c-name','c-note','disc-val'].forEach(id=>{ const el=document.getElementById(id); if(el)el.value=''; });
+  const wrap=document.getElementById('photo-slots-wrap'); if(wrap) wrap.innerHTML='';
+  payMode='cash';
+  document.querySelectorAll('.pb').forEach(b=>b.classList.remove('on'));
+  const cashBtn=document.querySelector('.pb'); if(cashBtn) cashBtn.classList.add('on');
+  const ps=document.getElementById('photo-sec'); if(ps) ps.style.display='block';
+  const lbl=document.getElementById('photo-sec-label'); if(lbl) lbl.textContent='แนบภาพ (เพิ่มหลังชำระได้)';
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
+  document.getElementById('page-pos').classList.add('active');
+  document.querySelectorAll('.nb').forEach(x=>x.classList.remove('active'));
+  const posBtn=document.querySelector('.nb'); if(posBtn) posBtn.classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  const firstTab=document.querySelector('.tab'); if(firstTab) firstTab.classList.add('active');
+  ['much','4u2','eyedol','normal'].forEach(g=>{ const el=document.getElementById('tab-'+g); if(el) el.classList.add('hidden'); });
+  const muchTab=document.getElementById('tab-much'); if(muchTab) muchTab.classList.remove('hidden');
+  updateCartUI();
+  toast('✅ บันทึกออเดอร์ #'+order.id+' สำเร็จ!','ok');
+  setTimeout(()=>{ fbQueuePush(order); }, 50);
 }
 
 // ════════════════════════════════════════════════
