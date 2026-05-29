@@ -250,7 +250,7 @@ button{cursor:pointer;border:none;outline:none;}
 .mo-row{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
 .mo-row:last-child{margin:0;}
 .mo-acts{display:flex;gap:10px;margin-top:15px;}
-.mo-acts button{flex:1;padding:13px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;-webkit-appearance:none;appearance:none;border:none;touch-action:manipulation;-webkit-tap-highlight-color:transparent;min-height:52px;}
+.mo-acts button{flex:1;padding:13px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;-webkit-appearance:none;appearance:none;border:none;touch-action:manipulation;-webkit-tap-highlight-color:transparent;min-height:52px;user-select:none;}
 .mc-cancel{background:var(--surface2);color:var(--text2);}
 .mc-ok{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;}
 .mc-ok.tl{background:linear-gradient(135deg,var(--teal),#25c4a0);}
@@ -612,8 +612,8 @@ button{cursor:pointer;border:none;outline:none;}
     <div class="mo-total" id="mo-total"></div>
     <div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:13px" id="mo-payinfo"></div>
     <div class="mo-acts">
-      <button type="button" class="mc-cancel" ontouchend="closeMo('mo-checkout')" onclick="closeMo('mo-checkout')">ยกเลิก</button>
-      <button type="button" class="mc-ok" id="mo-ok-btn" ontouchend="event.preventDefault();confirmCheckout();" onclick="confirmCheckout()">ยืนยัน ✓</button>
+      <button type="button" class="mc-cancel" onclick="closeMo('mo-checkout')">ยกเลิก</button>
+      <button type="button" class="mc-ok" id="mo-ok-btn" onclick="confirmCheckout()">ยืนยัน ✓</button>
     </div>
   </div>
 </div>
@@ -725,7 +725,7 @@ function startPolling(){
       const cloudBill = cfg.billNo||1;
       if(cloudBill > billNo){ billNo=cloudBill; localStorage.setItem('bk7_bill',String(billNo)); }
 
-      const hasNewOrders = cloudBill > _lastKnownBillNo + 1;
+      const hasNewOrders = cloudBill > _lastKnownBillNo + 1 || (cfg.orderCount||0) > orders.length;
       if(hasNewOrders || _lastKnownBillNo === 0){
         _lastKnownBillNo = cloudBill;
         // มีบิลใหม่จากเครื่องอื่น — ดึง orders เฉพาะตอนเปิดหน้าประวัติ/สรุปอยู่
@@ -1004,9 +1004,15 @@ function showPage(p,btn){
   document.querySelectorAll('.nb').forEach(x=>x.classList.remove('active'));
   document.getElementById('page-'+p).classList.add('active');
   if(btn)btn.classList.add('active');
-  if(p==='history')renderHistory();
+  if(p==='history'){
+    renderHistory(); // แสดงข้อมูล local ก่อนทันที
+    refreshOrders().then(()=>renderHistory()); // ดึง Firebase แล้ว render ใหม่
+  }
   if(p==='stock'){ renderStock(); populateStockSelect(); }
-  if(p==='summary')renderSummary();
+  if(p==='summary'){
+    renderSummary();
+    refreshOrders().then(()=>renderSummary());
+  }
   if(p==='settings'){ document.getElementById('s-event').value=eventName; buildPromoEditor(); }
 }
 
@@ -1386,6 +1392,7 @@ function openCheckout(){
   okBtn.disabled = false;
   okBtn.textContent = 'ยืนยัน ✓';
   okBtn.style.cssText = '';
+  window._co = false;
   document.getElementById('mo-checkout').classList.remove('hidden');
 }
 
@@ -1407,11 +1414,11 @@ async function fbQueuePush(order){
     if(_fbQueue.length > 0) await new Promise(r=>setTimeout(r,300));
   }
   _fbRunning = false;
-  // sync products + ส่ง productHash ให้เครื่องอื่นรู้ว่า stock เปลี่ยน
+  // sync products + ส่ง productHash และ orderCount ให้เครื่องอื่นรู้ทันที
   await fbSet('/bk8_products', products);
   const ph = products.map(p=>p.id+'_'+p.stock).join(',').substring(0,500);
   _lastProductHash = ph;
-  fbPatch('/bk8_config', {billNo, productHash: ph});
+  fbPatch('/bk8_config', {billNo, productHash: ph, orderCount: orders.length});
 }
 
 function genOrderId(){
@@ -1423,7 +1430,11 @@ function genOrderId(){
 }
 
 function confirmCheckout(){
-  if(window._co) return; window._co=true; setTimeout(()=>{window._co=false;},300);
+  // ── ป้องกันกดซ้ำด้วย disabled จริงๆ ──
+  const okBtn = document.getElementById('mo-ok-btn');
+  if(!okBtn || okBtn.disabled) return;
+  okBtn.disabled = true;
+  okBtn.textContent = '⏳ กำลังบันทึก…';
 
   const {sub,disc,total}=calcTotals();
   const isGift=payMode==='gift';
@@ -1431,8 +1442,8 @@ function confirmCheckout(){
 
   const order={
     id:newId, time:new Date().toISOString(),
-    customer:document.getElementById('c-name').value,
-    note:document.getElementById('c-note').value,
+    customer:document.getElementById('c-name').value||'',
+    note:document.getElementById('c-note').value||'',
     staffCode:currentUser.code, staffName:currentUser.name,
     items:JSON.parse(JSON.stringify(cart)),
     sub,disc,total,payMode,isGift,
@@ -1447,26 +1458,25 @@ function confirmCheckout(){
       it.items.forEach(x=>{
         const p=gp(x.productId); if(!p)return;
         if(x.free){ p.freeGiven=(p.freeGiven||0)+q; p.sold=(p.sold||0)+q; }
-        else { p.stock=Math.max(0,p.stock-q); p.sold=(p.sold||0)+q; }
+        else{ p.stock=Math.max(0,p.stock-q); p.sold=(p.sold||0)+q; }
       });
     } else {
       const p=gp(it.productId); if(!p)return;
       if(it.isGift||isGift){ p.freeGiven=(p.freeGiven||0)+it.qty; p.sold=(p.sold||0)+it.qty; }
-      else { p.stock=Math.max(0,p.stock-it.qty); p.sold=(p.sold||0)+it.qty; }
+      else{ p.stock=Math.max(0,p.stock-it.qty); p.sold=(p.sold||0)+it.qty; }
     }
   });
 
-  // ── 2. บันทึก local + อัพเดต hash ทันที (ป้องกัน polling overwrite) ──
+  // ── 2. บันทึก local ──
   orders.push(order);
   _lastOrderHash = orders.map(x=>x.id).join(',');
   save();
 
-  // ── 3. ปิด modal + reset UI ทันที ──
+  // ── 3. ปิด modal ──
   const mo = document.getElementById('mo-checkout');
   mo.classList.add('hidden');
-  mo.style.display = 'none';
-  setTimeout(()=>{ mo.style.display=''; }, 50);
 
+  // ── 4. reset cart/form/UI ──
   cart=[]; photoList=[];
   ['c-name','c-note','disc-val'].forEach(id=>{ const el=document.getElementById(id); if(el)el.value=''; });
   const wrap=document.getElementById('photo-slots-wrap'); if(wrap) wrap.innerHTML='';
@@ -1486,8 +1496,11 @@ function confirmCheckout(){
   updateCartUI();
   toast('✅ บันทึกออเดอร์ #'+order.id+' สำเร็จ!','ok');
 
-  // ── 4. ส่งขึ้น Firebase ผ่านคิว (ไม่ยิงพร้อมกันเยอะเกิน) ──
-  setTimeout(()=>{ fbQueuePush(order); }, 80);
+  // ── 5. reset ปุ่ม + ส่ง Firebase background ──
+  okBtn.disabled = false;
+  okBtn.textContent = 'ยืนยัน ✓';
+  window._co = false;
+  setTimeout(()=>{ fbQueuePush(order); }, 50);
 }
 
 // ════════════════════════════════════════════════
