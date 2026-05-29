@@ -1472,9 +1472,12 @@ function confirmCheckout(){
   _lastOrderHash = orders.map(x=>x.id).join(',');
   save();
 
-  // ── 3. ปิด modal ──
+  // ── 3. ปิด modal + reset ปุ่มทันที (ก่อน Firebase) ──
   const mo = document.getElementById('mo-checkout');
   mo.classList.add('hidden');
+  okBtn.disabled = false;
+  okBtn.textContent = 'ยืนยัน ✓';
+  window._co = false;
 
   // ── 4. reset cart/form/UI ──
   cart=[]; photoList=[];
@@ -1496,10 +1499,7 @@ function confirmCheckout(){
   updateCartUI();
   toast('✅ บันทึกออเดอร์ #'+order.id+' สำเร็จ!','ok');
 
-  // ── 5. reset ปุ่ม + ส่ง Firebase background ──
-  okBtn.disabled = false;
-  okBtn.textContent = 'ยืนยัน ✓';
-  window._co = false;
+  // ── 5. ส่ง Firebase background ──
   setTimeout(()=>{ fbQueuePush(order); }, 50);
 }
 
